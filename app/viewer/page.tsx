@@ -28,6 +28,7 @@ export default function ViewerPage() {
     // Inicia mudo para respeitar a política de Autoplay dos navegadores
     const [isMuted, setIsMuted] = useState(true);
     const [isTorchOn, setIsTorchOn] = useState(false);
+    const [isRinging, setIsRinging] = useState(false);
 
     const [battery, setBattery] = useState<BatteryState>({
         supported: false,
@@ -237,7 +238,6 @@ export default function ViewerPage() {
                     console.error("Erro ao entrar em tela cheia:", err);
                 });
             } else if ((remoteVideoRef.current as any)?.webkitEnterFullscreen) {
-                // Fallback para iOS Safari em video elementos
                 (remoteVideoRef.current as any).webkitEnterFullscreen();
             }
         } else {
@@ -275,6 +275,18 @@ export default function ViewerPage() {
                 enabled: nextTorchState,
             });
             setIsTorchOn(nextTorchState);
+        } else {
+            setErrorMsg("Canal de comandos com a câmera indisponível.");
+        }
+    }
+
+    function playCameraSound() {
+        if (dataConnectionRef.current && dataConnectionRef.current.open) {
+            dataConnectionRef.current.send({
+                type: "play-sound",
+            });
+            setIsRinging(true);
+            setTimeout(() => setIsRinging(false), 1200);
         } else {
             setErrorMsg("Canal de comandos com a câmera indisponível.");
         }
@@ -466,6 +478,21 @@ export default function ViewerPage() {
                         <TorchIcon isOn={isTorchOn} />
                     </button>
 
+                    {/* Chamada Sonora para Pets */}
+                    <button
+                        type="button"
+                        onClick={playCameraSound}
+                        disabled={!isConnected}
+                        aria-label="Tocar som na câmera"
+                        title="Atrair atenção das gatinhas"
+                        className={`flex h-12 w-12 items-center justify-center rounded-2xl border transition active:scale-90 disabled:cursor-not-allowed disabled:opacity-30 ${isRinging
+                            ? "border-purple-500/50 bg-purple-500/20 text-purple-300 shadow-[0_0_12px_rgba(168,85,247,0.4)] animate-bounce"
+                            : "border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white"
+                            }`}
+                    >
+                        <PetCallIcon />
+                    </button>
+
                     {/* Tela Cheia */}
                     <button
                         type="button"
@@ -524,6 +551,15 @@ function TorchIcon({ isOn }: { isOn: boolean }) {
         <svg viewBox="0 0 24 24" fill={isOn ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
             <path d="M18 6V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v2M6 6h12l-2 6v8a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-8L6 6z" strokeLinecap="round" strokeLinejoin="round" />
             {isOn && <line x1="12" y1="2" x2="12" y2="4" strokeLinecap="round" />}
+        </svg>
+    );
+}
+
+function PetCallIcon() {
+    return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M13.73 21a2 2 0 0 1-3.46 0" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
     );
 }

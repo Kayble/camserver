@@ -54,6 +54,49 @@ export default function CameraV2Page() {
         }
     }
 
+    /*
+     * Sintetiza um som agudo e agradável estilo "chime" para chamar a atenção dos pets
+     * sem precisar carregar arquivos de áudio externos (.mp3)
+     */
+    /*
+    * Reproduz o arquivo MP3 armazenado em /public/sounds/pet-call.mp3
+    */
+    /*
+* Adicione aqui os nomes dos seus arquivos salvos em /public/sounds/
+*/
+    const PET_SOUNDS = [
+        "/sounds/pet-call.mp3",
+        "/sounds/pet-call2.mp3",
+        "/sounds/pet-call3.mp3",
+    ];
+
+    let lastPlayedIndex = -1;
+
+    function playPetCallSound() {
+        try {
+            if (!PET_SOUNDS.length) return;
+
+            // Sorteia um índice aleatório sem repetir o anterior (caso haja mais de 1 som)
+            let randomIndex = Math.floor(Math.random() * PET_SOUNDS.length);
+            if (PET_SOUNDS.length > 1 && randomIndex === lastPlayedIndex) {
+                randomIndex = (randomIndex + 1) % PET_SOUNDS.length;
+            }
+            lastPlayedIndex = randomIndex;
+
+            const randomSoundPath = PET_SOUNDS[randomIndex];
+            console.log("[CameraV2] Tocando som aleatório:", randomSoundPath);
+
+            const audio = new Audio(randomSoundPath);
+            audio.volume = 1.0;
+
+            audio.play().catch((err) => {
+                console.error("Erro ao reproduzir o som na câmera:", err);
+            });
+        } catch (err) {
+            console.error("Não foi possível carregar o arquivo de áudio:", err);
+        }
+    }
+
     async function getBatteryInfo() {
         try {
             if (!("getBattery" in navigator)) return null;
@@ -182,7 +225,7 @@ export default function CameraV2Page() {
                     await sendBatteryInfo(connection);
                 });
 
-                // Escuta comandos recebidos do Viewer (ex: ligar/desligar lanterna)
+                // Escuta comandos recebidos do Viewer
                 connection.on("data", async (data: any) => {
                     if (data?.type === "toggle-torch") {
                         const videoTrack = streamRef.current?.getVideoTracks()[0];
@@ -196,6 +239,11 @@ export default function CameraV2Page() {
                                 console.error("[CameraV2] Não foi possível alterar a lanterna:", err);
                             }
                         }
+                    }
+
+                    if (data?.type === "play-sound") {
+                        console.log("[CameraV2] Tocando áudio para chamar pet...");
+                        playPetCallSound();
                     }
                 });
 
