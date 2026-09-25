@@ -1,0 +1,504 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+
+const PEER_ID_STORAGE_KEY = "camserver:camera-v2:peer-id";
+const CAMERA_NAME_STORAGE_KEY = "camserver:camera-v2:name";
+
+function generateCameraId() {
+    const random = Math.random().toString(36).substring(2, 8).toLowerCase();
+    return `camera-${random}`;
+}
+
+export default function CameraV2Page() {
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const isInitializingRef = useRef(false);
+
+    const peerRef = useRef<any>(null);
+    const streamRef = useRef<MediaStream | null>(null);
+    const dataConnectionsRef = useRef<Set<any>>(new Set());
+    const batteryCleanupRef = useRef<(() => void) | null>(null);
+
+    const [peerId, setPeerId] = useState("Inicializando...");
+    const [cameraName, setCameraName] = useState("Câmera");
+    const [status, setStatus] = useState("Iniciando...");
+    const [errorMsg, setErrorMsg] = useState("");
+    const [online, setOnline] = useState(false);
+
+    const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
+    const [isCharging, setIsCharging] = useState(false);
+
+    /*
+     * =====================================================
+     * STORAGE
+     * =====================================================
+     */
+    function getPersistentPeerId() {
+        try {
+            const saved = localStorage.getItem(PEER_ID_STORAGE_KEY);
+            if (saved?.trim()) return saved.trim();
+
+            const newId = generateCameraId();
+            localStorage.setItem(PEER_ID_STORAGE_KEY, newId);
+            return newId;
+        } catch {
+            return generateCameraId();
+        }
+    }
+
+    function getPersistentCameraName() {
+        try {
+            const saved = localStorage.getItem(CAMERA_NAME_STORAGE_KEY);
+            if (saved?.trim()) return saved.trim();
+
+            const defaultName = "Câmera";
+            localStorage.setItem(CAMERA_NAME_STORAGE_KEY, defaultName);
+            return defaultName;
+        } catch {
+            return "Câmera";
+        }
+    }
+
+    /*
+     * =====================================================
+     * BATERIA
+     * =====================================================
+     */
+    async function getBatteryInfo() {
+        try {
+            if (!("getBattery" in navigator)) return null;
+            const battery = await (navigator as any).getBattery();
+            return {
+                supported: true,
+                level: Math.round(battery.level * 100),
+                charging: battery.charging === true,
+            };
+        } catch {
+            return null;
+        }
+    }
+
+    async function sendBatteryInfo(connection: any) {
+        try {
+            if (!connection || !connection.open) return;
+            const battery = await getBatteryInfo();
+
+            if (!battery) {
+                connection.send({ type: "battery", supported: false });
+                return;
+            }
+
+            setBatteryLevel(battery.level);
+            setIsCharging(battery.charging);
+
+            connection.send({
+                type: "battery",
+                supported: true,
+                level: battery.level,
+                charging: battery.charging,
+                timestamp: Date.now(),
+            });
+        } catch (error) {
+            console.error("Erro enviando bateria:", error);
+        }
+    }
+
+    async function startBatteryMonitoring() {
+        try {
+            if (!("getBattery" in navigator)) return;
+            const battery = await (navigator as any).getBattery();
+
+            const updateBattery = () => {
+                const level = Math.round(battery.level * 100);
+                const charging = battery.charging === true;
+
+                setBatteryLevel(level);
+                setIsCharging(charging);
+
+                dataConnectionsRef.current.forEach((connection) => {
+                    try {
+                        if (connection?.open) {
+                            connection.send({
+                                type: "battery",
+                                supported: true,
+                                level,
+                                charging,
+                                timestamp: Date.now(),
+                            });
+                        }
+                    } catch { }
+                });
+            };
+
+            updateBattery();
+
+            battery.addEventListener("levelchange", updateBattery);
+            battery.addEventListener("chargingchange", updateBattery);
+
+            const interval = window.setInterval(updateBattery, 30000);
+
+            batteryCleanupRef.current = () => {
+                clearInterval(interval);
+                battery.removeEventListener("levelchange", updateBattery);
+                battery.removeEventListener("chargingchange", updateBattery);
+            };
+        } catch (error) {
+            console.error("Erro monitorando bateria:", error);
+        }
+    }
+
+    /*
+     * =====================================================
+     * PEERJS COM RETRY AUTOMÁTICO
+     * =====================================================
+     */
+    async function initPeerInstance(Peer: any, targetId: string, retryCount = 0): Promise<any> {
+        setStatus("Conectando ao servidor...");
+        setOnline(false);
+
+        return new Promise((resolve) => {
+            const peer = new Peer(targetId, { debug: 1 });
+
+            peer.on("open", (openedId: string) => {
+                console.log("[CameraV2] Peer conectado com sucesso:", openedId);
+                setPeerId(openedId);
+                setOnline(true);
+                setStatus("Câmera pronta e transmitindo");
+                setErrorMsg("");
+                peerRef.current = peer;
+                resolve(peer);
+            });
+
+            // Atende chamadas de vídeo enviando o stream atual
+            peer.on("call", (call: any) => {
+                console.log("[CameraV2] Recebendo chamada de vídeo de:", call.peer);
+                const activeStream = streamRef.current;
+
+                if (!activeStream || activeStream.getTracks().length === 0) {
+                    console.error("[CameraV2] Stream indisponível para responder a chamada.");
+                    return;
+                }
+
+                // Responde a chamada com o stream da câmera
+                call.answer(activeStream);
+                setStatus("Viewer conectado assistindo ao vivo");
+
+                call.on("close", () => {
+                    setStatus("Câmera pronta e transmitindo");
+                });
+
+                call.on("error", (err: any) => {
+                    console.error("[CameraV2] Erro na chamada:", err);
+                });
+            });
+
+            // Canal de Dados para métricas (Bateria)
+            peer.on("connection", (connection: any) => {
+                dataConnectionsRef.current.add(connection);
+
+                connection.on("open", async () => {
+                    await sendBatteryInfo(connection);
+                });
+
+                connection.on("close", () => {
+                    dataConnectionsRef.current.delete(connection);
+                });
+
+                connection.on("error", () => {
+                    dataConnectionsRef.current.delete(connection);
+                });
+            });
+
+            peer.on("disconnected", () => {
+                setOnline(false);
+                setStatus("Reconectando ao servidor...");
+                if (!peer.destroyed) {
+                    try { peer.reconnect(); } catch { }
+                }
+            });
+
+            peer.on("error", async (err: any) => {
+                console.error("[CameraV2] Erro PeerJS:", err);
+
+                // Trata o ID ocupado (ex: recarga rápida de página)
+                if (err.type === "unavailable-id") {
+                    peer.destroy();
+
+                    if (retryCount < 3) {
+                        setStatus(`ID em uso. Tentando reconectar em 2s (Tentativa ${retryCount + 1})...`);
+                        await new Promise((r) => setTimeout(r, 2000));
+                        const retriedPeer = await initPeerInstance(Peer, targetId, retryCount + 1);
+                        resolve(retriedPeer);
+                    } else {
+                        // Se o ID persistente continuar travado, gera um fallback temporário com sufixo
+                        const fallbackId = `${targetId}-${Math.floor(1000 + Math.random() * 9000)}`;
+                        setErrorMsg(`O ID original estava preso no servidor. Conectado como: ${fallbackId}`);
+                        const fallbackPeer = await initPeerInstance(Peer, fallbackId, 0);
+                        resolve(fallbackPeer);
+                    }
+                    return;
+                }
+
+                setOnline(false);
+                setStatus("Erro de conexão");
+                setErrorMsg(`Erro PeerJS: ${err.type || err.message}`);
+                resolve(null);
+            });
+        });
+    }
+
+    /*
+     * =====================================================
+     * INICIALIZAÇÃO DA CÂMERA
+     * =====================================================
+     */
+    useEffect(() => {
+        if (isInitializingRef.current) return;
+        isInitializingRef.current = true;
+
+        async function startCamera() {
+            try {
+                setStatus("Verificando suporte a HTTPS...");
+                setErrorMsg("");
+
+                if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+                    throw new Error("A câmera exige HTTPS e suporte a mediaDevices.");
+                }
+
+                const name = getPersistentCameraName();
+                const id = getPersistentPeerId();
+
+                setCameraName(name);
+                setPeerId(id);
+
+                setStatus("Solicitando acesso à câmera e microfone...");
+
+                const mediaStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: { ideal: "environment" },
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 },
+                    },
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                    },
+                });
+
+                // Monitora se outra aba/aplicativo assumir o controle da câmera no dispositivo
+                const videoTrack = mediaStream.getVideoTracks()[0];
+                if (videoTrack) {
+                    videoTrack.onmute = () => {
+                        console.warn("[CameraV2] A faixa de vídeo foi ocupada por outra aba/aplicativo.");
+                        setStatus("Câmera ocupada por outra aba");
+                        setErrorMsg("A câmera está sendo usada por outra aba ou aplicativo. Feche as outras abas para reativar o vídeo.");
+                        setOnline(false);
+                    };
+
+                    videoTrack.onunmute = () => {
+                        console.log("[CameraV2] A faixa de vídeo foi liberada.");
+                        setStatus("Câmera pronta e transmitindo");
+                        setErrorMsg("");
+                        setOnline(true);
+                    };
+                }
+
+                streamRef.current = mediaStream;
+
+                // Vincula o stream ao elemento de vídeo local (Muted para evitar microfonia)
+                if (videoRef.current) {
+                    videoRef.current.srcObject = mediaStream;
+                    videoRef.current.play().catch((e) => console.warn("Autoplay preview:", e));
+                }
+
+                setStatus("Carregando conexão PeerJS...");
+                const { Peer } = await import("peerjs");
+
+                await initPeerInstance(Peer, id);
+                await startBatteryMonitoring();
+
+            } catch (error: any) {
+                console.error("[CameraV2] Falha ao iniciar:", error);
+                setOnline(false);
+                setStatus("Falha ao iniciar");
+                setErrorMsg(`${error?.name || "Erro"}: ${error?.message || "Erro desconhecido"}`);
+            }
+        }
+
+        startCamera();
+
+        return () => {
+            if (batteryCleanupRef.current) {
+                batteryCleanupRef.current();
+                batteryCleanupRef.current = null;
+            }
+
+            dataConnectionsRef.current.forEach((conn) => {
+                try { conn.close(); } catch { }
+            });
+            dataConnectionsRef.current.clear();
+
+            if (videoRef.current) {
+                videoRef.current.srcObject = null;
+            }
+
+            if (streamRef.current) {
+                streamRef.current.getTracks().forEach((track) => track.stop());
+                streamRef.current = null;
+            }
+
+            if (peerRef.current) {
+                try { peerRef.current.destroy(); } catch { }
+                peerRef.current = null;
+            }
+        };
+    }, []);
+
+    function resetCameraId() {
+        if (window.confirm("Gerar um novo ID permanente para esta câmera?")) {
+            try {
+                localStorage.removeItem(PEER_ID_STORAGE_KEY);
+                window.location.reload();
+            } catch (error) {
+                console.error("Erro resetando ID:", error);
+            }
+        }
+    }
+
+    return (
+        <main className="min-h-screen bg-black text-white">
+            <header className="border-b border-zinc-800 bg-zinc-950 px-4 py-4">
+                <div className="mx-auto flex max-w-md items-center justify-between">
+                    <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-400">
+                            CamServer V2
+                        </p>
+                        <h1 className="mt-1 truncate text-lg font-bold">
+                            {cameraName}
+                        </h1>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900 px-3 py-2">
+                        <span
+                            className={`h-2 w-2 rounded-full ${online ? "bg-emerald-400" : "bg-yellow-400"
+                                }`}
+                        />
+                        <span className="text-[10px] font-semibold text-zinc-300">
+                            {online ? "ONLINE" : "CONECTANDO"}
+                        </span>
+                    </div>
+                </div>
+            </header>
+
+            <div className="mx-auto flex max-w-md flex-col p-4">
+                {/* Preview */}
+                <div className="relative overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-950 shadow-2xl">
+                    <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="aspect-[9/16] w-full bg-black object-cover"
+                    />
+
+                    {/* Badge Live */}
+                    <div className="absolute left-3 top-3 flex items-center gap-2 rounded-full border border-zinc-700 bg-black/70 px-3 py-1.5 backdrop-blur">
+                        <span
+                            className={`h-2 w-2 rounded-full ${online ? "bg-red-500 animate-pulse" : "bg-zinc-500"
+                                }`}
+                        />
+                        <span className="text-[10px] font-semibold">
+                            {online ? "AO VIVO" : "OFFLINE"}
+                        </span>
+                    </div>
+
+                    {/* Badge Bateria */}
+                    <div className="absolute right-3 top-3 flex items-center gap-2 rounded-full border border-zinc-700 bg-black/70 px-3 py-1.5 backdrop-blur">
+                        <span
+                            className={`h-2.5 w-5 rounded-sm border ${batteryLevel !== null && batteryLevel <= 15
+                                ? "border-red-400"
+                                : "border-zinc-300"
+                                }`}
+                        >
+                            <span
+                                className={`block h-full rounded-[1px] ${batteryLevel !== null && batteryLevel <= 15
+                                    ? "bg-red-400"
+                                    : "bg-zinc-300"
+                                    }`}
+                                style={{ width: `${batteryLevel ?? 0}%` }}
+                            />
+                        </span>
+                        <span className="text-[10px] font-semibold">
+                            {batteryLevel !== null ? `${batteryLevel}%` : "--"}
+                        </span>
+                    </div>
+
+                    {/* Loader / Estado de Câmera Ocupada ou Offline */}
+                    {!online && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
+                            <div className="h-8 w-8 animate-spin rounded-full border-2 border-zinc-700 border-t-emerald-400" />
+                            <p className="mt-3 px-6 text-center text-xs text-zinc-400">
+                                {status}
+                            </p>
+                        </div>
+                    )}
+                </div>
+
+                {/* Info / Status */}
+                <div className="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+                    <p className="text-[10px] uppercase tracking-wider text-zinc-500">
+                        Peer ID Permanente
+                    </p>
+                    <p className="mt-1 break-all font-mono text-xs font-bold text-emerald-400">
+                        {peerId}
+                    </p>
+
+                    <div className="mt-4 border-t border-zinc-800 pt-4">
+                        <p className="text-[10px] uppercase tracking-wider text-zinc-500">
+                            Status da Conexão
+                        </p>
+                        <p className="mt-1 text-sm text-zinc-300">{status}</p>
+                    </div>
+
+                    <div className="mt-4 border-t border-zinc-800 pt-4">
+                        <div className="flex items-center justify-between">
+                            <span className="text-xs text-zinc-500">Bateria do Celular</span>
+                            <span
+                                className={`text-sm font-bold ${batteryLevel !== null && batteryLevel <= 15
+                                    ? "text-red-400"
+                                    : "text-zinc-200"
+                                    }`}
+                            >
+                                {batteryLevel !== null ? `${batteryLevel}%` : "N/D"}
+                            </span>
+                        </div>
+                        {isCharging && (
+                            <p className="mt-1 text-xs text-emerald-400">⚡ Carregando</p>
+                        )}
+                    </div>
+                </div>
+
+                {/* Mensagens de Erro / Alerta de Câmera Ocupada */}
+                {errorMsg && (
+                    <div className="mt-4 rounded-2xl border border-red-500/30 bg-red-500/10 p-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-red-400">
+                            Aviso
+                        </p>
+                        <p className="mt-2 text-xs leading-relaxed text-red-300">
+                            {errorMsg}
+                        </p>
+                    </div>
+                )}
+
+                {/* Reset ID */}
+                <button
+                    type="button"
+                    onClick={resetCameraId}
+                    className="mt-6 pb-4 text-xs text-zinc-500 transition hover:text-red-400"
+                >
+                    Gerar novo ID permanente para esta câmera
+                </button>
+            </div>
+        </main>
+    );
+}
