@@ -24,6 +24,7 @@ export default function ViewerPage() {
     const [errorMsg, setErrorMsg] = useState("");
     const [isLandscape, setIsLandscape] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const [copied, setCopied] = useState(false);
 
     // Inicia mudo para respeitar a política de Autoplay dos navegadores
     const [isMuted, setIsMuted] = useState(true);
@@ -292,6 +293,17 @@ export default function ViewerPage() {
         }
     }
 
+    function copyTargetIdToClipboard() {
+        if (!targetId) return;
+
+        navigator.clipboard.writeText(targetId).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        }).catch((err) => {
+            console.error("Erro ao copiar Peer ID:", err);
+        });
+    }
+
     function takeScreenshot() {
         const video = remoteVideoRef.current;
         if (!video || !video.videoWidth || !video.videoHeight) {
@@ -517,9 +529,29 @@ export default function ViewerPage() {
                     </button>
                 </div>
 
-                <p className="mt-2 text-center text-[9px] text-zinc-700">
-                    {targetId}
-                </p>
+                <div className="mt-2 flex items-center justify-center gap-2">
+                    <span className="font-mono text-[9px] text-zinc-600">{targetId}</span>
+                    {targetId && (
+                        <button
+                            type="button"
+                            onClick={copyTargetIdToClipboard}
+                            aria-label="Copiar Peer ID"
+                            className="flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-zinc-400 transition active:scale-95 hover:bg-white/10 hover:text-white"
+                        >
+                            {copied ? (
+                                <>
+                                    <CheckIcon />
+                                    <span className="text-emerald-400 font-semibold">Copiado!</span>
+                                </>
+                            ) : (
+                                <>
+                                    <CopyIcon />
+                                    <span>Copiar ID</span>
+                                </>
+                            )}
+                        </button>
+                    )}
+                </div>
             </div>
         </main>
     );
@@ -652,6 +684,23 @@ function LoadingIcon() {
     return (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5 animate-spin text-zinc-500">
             <path d="M12 3a9 9 0 109 9" strokeLinecap="round" />
+        </svg>
+    );
+}
+
+function CopyIcon() {
+    return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3 w-3">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
+function CheckIcon() {
+    return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" className="h-3 w-3 text-emerald-400">
+            <polyline points="20 6 9 17 4 12" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
     );
 }

@@ -24,6 +24,7 @@ export default function CameraV2Page() {
     const [status, setStatus] = useState("Iniciando...");
     const [errorMsg, setErrorMsg] = useState("");
     const [online, setOnline] = useState(false);
+    const [copied, setCopied] = useState(false);
 
     const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
     const [isCharging, setIsCharging] = useState(false);
@@ -54,16 +55,6 @@ export default function CameraV2Page() {
         }
     }
 
-    /*
-     * Sintetiza um som agudo e agradável estilo "chime" para chamar a atenção dos pets
-     * sem precisar carregar arquivos de áudio externos (.mp3)
-     */
-    /*
-    * Reproduz o arquivo MP3 armazenado em /public/sounds/pet-call.mp3
-    */
-    /*
-* Adicione aqui os nomes dos seus arquivos salvos em /public/sounds/
-*/
     const PET_SOUNDS = [
         "/sounds/pet-call.mp3",
         "/sounds/pet-call2.mp3",
@@ -77,7 +68,6 @@ export default function CameraV2Page() {
         try {
             if (!PET_SOUNDS.length) return;
 
-            // Sorteia um índice aleatório sem repetir o anterior (caso haja mais de 1 som)
             let randomIndex = Math.floor(Math.random() * PET_SOUNDS.length);
             if (PET_SOUNDS.length > 1 && randomIndex === lastPlayedIndex) {
                 randomIndex = (randomIndex + 1) % PET_SOUNDS.length;
@@ -96,6 +86,17 @@ export default function CameraV2Page() {
         } catch (err) {
             console.error("Não foi possível carregar o arquivo de áudio:", err);
         }
+    }
+
+    function copyPeerIdToClipboard() {
+        if (!peerId || peerId === "Inicializando...") return;
+
+        navigator.clipboard.writeText(peerId).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        }).catch((err) => {
+            console.error("Erro ao copiar Peer ID:", err);
+        });
     }
 
     async function getBatteryInfo() {
@@ -226,7 +227,6 @@ export default function CameraV2Page() {
                     await sendBatteryInfo(connection);
                 });
 
-                // Escuta comandos recebidos do Viewer
                 connection.on("data", async (data: any) => {
                     if (data?.type === "toggle-torch") {
                         const videoTrack = streamRef.current?.getVideoTracks()[0];
@@ -485,10 +485,32 @@ export default function CameraV2Page() {
                 </div>
 
                 <div className="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
-                    <p className="text-[10px] uppercase tracking-wider text-zinc-500">
-                        Peer ID Permanente
-                    </p>
-                    <p className="mt-1 break-all font-mono text-xs font-bold text-emerald-400">
+                    <div className="flex items-center justify-between">
+                        <p className="text-[10px] uppercase tracking-wider text-zinc-500">
+                            Peer ID Permanente
+                        </p>
+                        <button
+                            type="button"
+                            onClick={copyPeerIdToClipboard}
+                            disabled={!peerId || peerId === "Inicializando..."}
+                            aria-label="Copiar Peer ID"
+                            className="flex items-center gap-1.5 rounded-lg bg-zinc-800/80 px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition active:scale-95 hover:bg-zinc-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            {copied ? (
+                                <>
+                                    <CheckIcon />
+                                    <span className="text-emerald-400 font-semibold">Copiado!</span>
+                                </>
+                            ) : (
+                                <>
+                                    <CopyIcon />
+                                    <span>Copiar</span>
+                                </>
+                            )}
+                        </button>
+                    </div>
+
+                    <p className="mt-2 break-all font-mono text-xs font-bold text-emerald-400">
                         {peerId}
                     </p>
 
@@ -537,5 +559,26 @@ export default function CameraV2Page() {
                 </button>
             </div>
         </main>
+    );
+}
+
+/* ================================================= */
+/* ICONS */
+/* ================================================= */
+
+function CopyIcon() {
+    return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
+function CheckIcon() {
+    return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" className="h-3.5 w-3.5 text-emerald-400">
+            <polyline points="20 6 9 17 4 12" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
     );
 }
