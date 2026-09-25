@@ -68,6 +68,7 @@ export default function CameraV2Page() {
         "/sounds/pet-call.mp3",
         "/sounds/pet-call2.mp3",
         "/sounds/pet-call3.mp3",
+        "/sounds/pet-call4.mp3",
     ];
 
     let lastPlayedIndex = -1;
